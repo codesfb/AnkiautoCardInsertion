@@ -6,102 +6,105 @@ import time
 import io
 import base64
 
-# --- CONFIGURAÇÕES ---
-# Altere estas variáveis de acordo com sua necessidade
-ARQUIVO_ENTRADA = "frases.txt"
-DECK_NOME = "Spanish" # O nome exato do baralho no Anki
-MODELO_NOME = "Basic" # O nome do tipo de nota (geralmente "Básico")
-LIMITE_CARDS = 10  # Quantos cards adicionar por execução
-IDIOMA_AUDIO = 'es' # Idioma do áudio a ser gerado (ex: 'es' para espanhol)
+# --- SETTINGS ---
+# Change these variables according to your needs
+INPUT_FILE = "frases.txt"
+DECK_NAME = "Spanish"  # The exact name of the deck in Anki
+MODEL_NAME = "Basic"   # The name of the note type (usually "Basic")
+CARD_LIMIT = 10        # How many cards to add per run
+AUDIO_LANG = 'es'      # Language of the audio to be generated (e.g., 'es' for Spanish)
 
-# URL do AnkiConnect (geralmente não precisa mudar)
+# AnkiConnect URL (usually doesn't need to be changed)
 ANKI_CONNECT_URL = "http://localhost:8765"
 
 def invoke_anki_connect(action, **params):
-    """Função para fazer uma requisição à API do AnkiConnect."""
+    """Helper function to make a request to the AnkiConnect API."""
     payload = {"action": action, "version": 6, "params": params}
     try:
         response = requests.post(ANKI_CONNECT_URL, json=payload)
-        response.raise_for_status()  # Lança um erro para respostas HTTP ruins (4xx ou 5xx)
+        response.raise_for_status()  # Raise an error for bad HTTP responses (4xx or 5xx)
         response_json = response.json()
         if 'error' in response_json and response_json['error'] is not None:
-            print(f"Erro recebido do AnkiConnect: {response_json['error']}")
+            print(f"Error received from AnkiConnect: {response_json['error']}")
             return None
         return response_json['result']
     except requests.exceptions.RequestException as e:
-        print(f"Não foi possível conectar ao AnkiConnect. Verifique se o Anki está aberto e o plugin AnkiConnect está instalado. Erro: {e}")
+        print(f"Could not connect to AnkiConnect. Please ensure Anki is running and the AnkiConnect add-on is installed. Error: {e}")
         return None
 
-def main():
-    """Função principal que orquestra a criação de cards."""
-    print("Iniciando script para adicionar cards ao Anki...")
+def run_card_creation_logic(log_callback=print):
+    """
+    The core logic for creating Anki cards.
+    Accepts a callback function to handle logging.
+    """
+    log_callback("Starting script to add cards to Anki...")
 
-    # 1. Verificar se o Anki está acessível
+    # 1. Check if Anki is accessible
     if invoke_anki_connect('deckNames') is None:
-        return # A mensagem de erro já foi impressa pela função invoke
+        return  # The error message is already printed by the invoke function
 
-    # 2. Ler o arquivo de frases
+    # 2. Read the phrases file
     try:
-        with open(ARQUIVO_ENTRADA, 'r', encoding='utf-8') as f:
-            linhas = [linha.strip() for linha in f if linha.strip() and '|' in linha]
+        with open(INPUT_FILE, 'r', encoding='utf-8') as f:
+            lines = [line.strip() for line in f if line.strip() and '|' in line]
     except FileNotFoundError:
-        print(f"Erro: Arquivo '{ARQUIVO_ENTRADA}' não encontrado. Crie este arquivo no mesmo diretório do script.")
+        log_callback(f"Error: File '{INPUT_FILE}' not found. Please create this file in the same directory as the script.")
         return
 
-    cards_adicionados = 0
-    for i, linha in enumerate(linhas):
-        if cards_adicionados >= LIMITE_CARDS:
-            print(f"\nLimite de {LIMITE_CARDS} cards atingido. Encerrando.")
+    cards_added = 0
+    for i, line in enumerate(lines):
+        if cards_added >= CARD_LIMIT:
+            log_callback(f"\nCard limit of {CARD_LIMIT} reached. Exiting.")
             break
 
-        frente, verso = [parte.strip() for parte in linha.split('|', 1)]
+        front, back = [part.strip() for part in line.split('|', 1)]
         
-        print(f"\nProcessando card {cards_adicionados + 1}/{LIMITE_CARDS}: '{frente}'")
+        log_callback(f"\nProcessing card {cards_added + 1}/{CARD_LIMIT}: '{front}'")
 
-        # 4. Verificar se o card já existe para não criar duplicatas
-        query = f'"deck:{DECK_NOME}" "Frente:{frente}"'
+        # 4. Check if the card already exists to avoid duplicates
+        query = f'"deck:{DECK_NAME}" "Front:{front}"'
         if invoke_anki_connect('findNotes', query=query):
-            print(f"Card para '{frente}' já existe. Pulando.")
+            log_callback(f"Card for '{front}' already exists. Skipping.")
             continue
 
-        # 5. Gerar e armazenar áudio
-        nome_arquivo_audio = f"auto_anki_{int(time.time() * 1000)}.mp3"
+        # 5. Generate and store audio
+        audio_filename = f"auto_anki_{int(time.time() * 1000)}.mp3"
         try:
-            tts = gTTS(text=frente, lang=IDIOMA_AUDIO)
-            
-            # Criar um stream de bytes em memória para salvar o áudio
+            tts = gTTS(text=front, lang=AUDIO_LANG)
             mp3_fp = io.BytesIO()
             tts.write_to_fp(mp3_fp)
-            mp3_fp.seek(0) # Voltar para o início do stream
-
-            # Ler os bytes e codificar em Base64
+            mp3_fp.seek(0)
             audio_bytes = mp3_fp.read()
             audio_data_b64 = base64.b64encode(audio_bytes).decode('utf-8')
 
-            if invoke_anki_connect('storeMediaFile', filename=nome_arquivo_audio, data=audio_data_b64) is None:
-                print("Falha ao armazenar o arquivo de áudio. Pulando este card.")
+            if invoke_anki_connect('storeMediaFile', filename=audio_filename, data=audio_data_b64) is None:
+                log_callback("Failed to store the audio file. Skipping this card.")
                 continue
-            print(f"Áudio '{nome_arquivo_audio}' gerado e armazenado.")
+            log_callback(f"  Audio '{audio_filename}' generated and stored.")
         except Exception as e:
-            print(f"Erro ao gerar áudio para '{frente}': {e}")
+            log_callback(f"  Error generating audio for '{front}': {e}")
             continue
 
-        # 6. Montar e adicionar a nota
-        campo_frente_com_audio = f"{frente} [sound:{nome_arquivo_audio}]"
-        nota = {
-            "deckName": DECK_NOME,
-            "modelName": MODELO_NOME,
-            "fields": {"Front": campo_frente_com_audio, "Back": verso},
+        # 6. Assemble and add the note
+        front_field_with_audio = f"{front} [sound:{audio_filename}]"
+        note = {
+            "deckName": DECK_NAME,
+            "modelName": MODEL_NAME,
+            "fields": {"Front": front_field_with_audio, "Back": back},
             "tags": ["auto-gerado"]
         }
 
-        if invoke_anki_connect('addNote', note=nota):
-            print(f"Card para '{frente}' adicionado com sucesso!")
-            cards_adicionados += 1
+        if invoke_anki_connect('addNote', note=note):
+            log_callback(f"  Card for '{front}' added successfully!")
+            cards_added += 1
         else:
-            print(f"Falha ao adicionar o card para '{frente}'.")
+            log_callback(f"  Failed to add card for '{front}'.")
 
-    print(f"\nProcesso concluído. Total de cards adicionados: {cards_adicionados}.")
+    log_callback(f"\nProcess complete. Total cards added: {cards_added}.")
+
+def main():
+    """Main function for command-line execution."""
+    run_card_creation_logic(log_callback=print)
 
 if __name__ == "__main__":
     main()
