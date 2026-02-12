@@ -1,3 +1,4 @@
 
-El sol es amarillo.|The sun is yellow.
-Nosotros aprendemos español.|We learn Spanish.
+
+El *perro* ladra fuerte.|The dog barks loudly.
+Necesito comprar *pan*.|I need to buy bread.

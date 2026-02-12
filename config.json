@@ -1,0 +1,8 @@
+{
+      "input_file": "frases.txt",
+      "deck_name": "Spanish",
+      "model_name": "Basic",
+      "card_limit": 10,
+      "audio_lang": "es",
+      "pexels_api_key": "vlVKbradXNAWe8nh6Y6N0iXdxLZZPGpkn4pH66kioYOIjLAZyRIg2KYl"
+    }

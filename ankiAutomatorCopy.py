@@ -5,7 +5,6 @@ from gtts import gTTS
 import time
 import io
 import base64
-import re
 
 # AnkiConnect URL (usually doesn't need to be changed)
 ANKI_CONNECT_URL = "http://localhost:8765"
@@ -23,31 +22,6 @@ def invoke_anki_connect(action, *, log_callback=print, **params):
         return response_json['result']
     except requests.exceptions.RequestException as e:
         log_callback(f"Could not connect to AnkiConnect. Please ensure Anki is running and the AnkiConnect add-on is installed. Error: {e}")
-        return None
-
-def search_for_image(query, api_key, log_callback):
-    """Searches for an image using the Pexels API and returns a URL."""
-    if not api_key:
-        return None
-
-    headers = {"Authorization": api_key}
-    # Using locale might improve results for Spanish words
-    params = {"query": query, "per_page": 1, "page": 1, "locale": "es-ES"}
-    api_url = "https://api.pexels.com/v1/search"
-
-    try:
-        response = requests.get(api_url, headers=headers, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if data.get("photos"):
-            # 'medium' is a good size for a flashcard.
-            return data["photos"][0]["src"]["medium"]
-        return None
-    except requests.exceptions.RequestException as e:
-        log_callback(f"  Error connecting to Pexels API: {e}")
-        return None
-    except Exception as e:
-        log_callback(f"  An unexpected error occurred during image search: {e}")
         return None
 
 def run_card_creation_logic(log_callback=print):
@@ -89,65 +63,25 @@ def run_card_creation_logic(log_callback=print):
         return
 
     cards_added = 0
-    pexels_api_key = config.get("pexels_api_key")
-
     for i, line in enumerate(lines):
         if cards_added >= config['card_limit']:
             log_callback(f"\nCard limit of {config['card_limit']} reached. Exiting.")
             break
 
-        try:
-            front_raw, back_translation = [part.strip() for part in line.split('|', 1)]
-        except ValueError:
-            log_callback(f"  Skipping malformed line: {line}")
-            continue
+        front, back = [part.strip() for part in line.split('|', 1)]
         
-        log_callback(f"\nProcessing card {cards_added + 1}/{config['card_limit']}: '{front_raw}'")
+        log_callback(f"\nProcessing card {cards_added + 1}/{config['card_limit']}: '{front}'")
 
-        # --- Parse for target word and format fields ---
-        target_word_match = re.search(r'\*(.*?)\*', front_raw)
-        target_word = None
-        
-        if target_word_match:
-            target_word = target_word_match.group(1)
-            # Front for display: "Quisiera un <b>café</b>, por favor."
-            front_for_card = front_raw.replace(f'*{target_word}*', f'<b>{target_word}</b>')
-            # Front for TTS (clean): "Quisiera un café, por favor."
-            front_for_tts = front_raw.replace(f'*{target_word}*', target_word)
-        else:
-            # No special word, use as is
-            front_for_card = front_raw
-            front_for_tts = front_raw
-
-        # 4. Check if the card already exists using the clean text to avoid duplicates
-        query = f'"deck:{config["deck_name"]}" "Front:{front_for_tts}"'
+        # 4. Check if the card already exists to avoid duplicates
+        query = f'"deck:{config["deck_name"]}" "Front:{front}"'
         if invoke_anki_connect('findNotes', query=query, log_callback=log_callback):
-            log_callback(f"Card for '{front_for_tts}' already exists. Skipping.")
+            log_callback(f"Card for '{front}' already exists. Skipping.")
             continue
 
-        # --- Image Search ---
-        image_url = None
-        if target_word and pexels_api_key:
-            log_callback(f"  Searching for image for '{target_word}'...")
-            image_url = search_for_image(target_word, pexels_api_key, log_callback)
-            if image_url:
-                log_callback(f"  Image found.")
-            else:
-                log_callback(f"  No image found for '{target_word}'.")
-        elif target_word and not pexels_api_key:
-            log_callback("  Found target word, but 'pexels_api_key' is missing in config.json. Skipping image search.")
-
-        # --- Assemble Final Back Field ---
-        if image_url:
-            # Style the image to prevent it from being too large on the card.
-            back_field_content = f'{back_translation}<br><br><img src="{image_url}" style="max-width: 250px; max-height: 250px;">'
-        else:
-            back_field_content = back_translation
-
-        # 5. Generate and store audio (using clean text)
+        # 5. Generate and store audio
         audio_filename = f"auto_anki_{int(time.time() * 1000)}.mp3"
         try:
-            tts = gTTS(text=front_for_tts, lang=config['audio_lang'])
+            tts = gTTS(text=front, lang=config['audio_lang'])
             mp3_fp = io.BytesIO()
             tts.write_to_fp(mp3_fp)
             mp3_fp.seek(0)
@@ -155,27 +89,27 @@ def run_card_creation_logic(log_callback=print):
             audio_data_b64 = base64.b64encode(audio_bytes).decode('utf-8')
 
             if invoke_anki_connect('storeMediaFile', filename=audio_filename, data=audio_data_b64, log_callback=log_callback) is None:
-                log_callback("  Failed to store the audio file. Skipping this card.")
+                log_callback("Failed to store the audio file. Skipping this card.")
                 continue
             log_callback(f"  Audio '{audio_filename}' generated and stored.")
         except Exception as e:
-            log_callback(f"  Error generating audio for '{front_for_tts}': {e}")
+            log_callback(f"  Error generating audio for '{front}': {e}")
             continue
 
         # 6. Assemble and add the note
-        front_field_with_audio = f"{front_for_card} [sound:{audio_filename}]"
+        front_field_with_audio = f"{front} [sound:{audio_filename}]"
         note = {
             "deckName": config['deck_name'],
             "modelName": config['model_name'],
-            "fields": {"Front": front_field_with_audio, "Back": back_field_content},
+            "fields": {"Front": front_field_with_audio, "Back": back},
             "tags": ["auto-gerado"]
         }
 
         if invoke_anki_connect('addNote', note=note, log_callback=log_callback):
-            log_callback(f"  Card for '{front_for_tts}' added successfully!")
+            log_callback(f"  Card for '{front}' added successfully!")
             cards_added += 1
         else:
-            log_callback(f"  Failed to add card for '{front_for_tts}'.")
+            log_callback(f"  Failed to add card for '{front}'.")
 
     log_callback(f"\nProcess complete. Total cards added: {cards_added}.")
 
